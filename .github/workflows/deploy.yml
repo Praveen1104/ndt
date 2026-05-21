@@ -1,0 +1,124 @@
+name: Continuous Integration & Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main # Make sure your active repository branch is main (not master)
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-backend:
+    name: Build & Verify Backend Service
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js Environment
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18 # FIXED: Removed duplicate 'node-' typo string
+          cache: 'npm'
+          cache-dependency-path: './backend/package-lock.json'
+
+      - name: Verify Backend Directory Setup
+        run: |
+          echo "Checking directory layout..."
+          ls -la backend/
+          if [ -d "backend/static" ]; then
+            echo "Error: backend/static should be git-ignored and not committed to remote repository!"
+            exit 1
+          else
+            echo "Success: backend/static directory is successfully excluded from Git history."
+          fi
+
+      - name: Install Dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Run Backend Security Audit
+        working-directory: ./backend
+        run: npm audit --audit-level=high || true
+
+      - name: Test Docker Container Build
+        run: |
+          echo "Building backend Docker container..."
+          docker build -t unified-backend:latest ./backend
+          docker images unified-backend:latest
+
+  build-frontend:
+    name: Build & Verify Next.js Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js Environment
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+          cache-dependency-path: './frontend/package-lock.json'
+
+      - name: Install Next.js Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Lint Next.js Project Code
+        working-directory: ./frontend
+        run: npm run lint --if-present
+
+      - name: Verify Next.js Production Build
+        working-directory: ./frontend
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+          NEXT_PUBLIC_API_URL: "https://quantumsharq.com" # Updated to production URL string
+
+      - name: Test Docker Container Build
+        run: |
+          echo "Building Next.js frontend Docker container..."
+          docker build -t unified-frontend:latest ./frontend
+          docker images unified-frontend:latest
+
+  # =========================================================================
+  # 🚀 ADDED PRODUCTION DEPLOYMENT STAGE
+  # =========================================================================
+  deploy-to-kvm:
+    name: Deploy to Live Hostinger KVM Server
+    needs: [build-backend, build-frontend] # Runs ONLY if verification passes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v3
+
+      - name: Install SSH Automation Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass rsync
+
+      - name: Trust Server Host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Sync Code via Native rsync
+        run: |
+          sshpass -p "${{ secrets.SSH_PASSWORD }}" rsync -avz \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='backend/static/' \
+            --exclude='frontend/node_modules/' \
+            --exclude='frontend/.next/' \
+            ./ root@${{ secrets.SERVER_IP }}:/var/www/://quantumsharq.com
+
+      - name: SSH and Restart All Containers
+        run: |
+          sshpass -p "${{ secrets.SSH_PASSWORD }}" ssh root@${{ secrets.SERVER_IP }} "cd /var/www/://quantumsharq.com && docker compose up -d --build"

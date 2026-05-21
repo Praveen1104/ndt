@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: unified-backend
+    ports:
+      # SECURED: Locked internally to Host Port 5100 -> Container Port 5200
+      - "127.0.0.1:5100:5200"
+    environment:
+      - PORT=5200
+      - NODE_ENV=production
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: unified-frontend
+    ports:
+      # SECURED: Locked internally to Host Port 5200 -> Container Port 3000
+      - "127.0.0.1:5200:3000"
+    environment:
+      - PORT=3000
+      # FIXED: Points to your real, secure backend domain string managed by CloudPanel
+      - NEXT_PUBLIC_API_URL=https://quantumsharq.com
+    depends_on:
+      - backend
+    restart: always
